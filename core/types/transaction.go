@@ -45,12 +45,22 @@ const (
 	LegacyTxType = iota
 	AccessListTxType
 	DynamicFeeTxType
+	ArbitrumDepositTxType         = 100
+	ArbitrumUnsignedTxType        = 101
+	ArbitrumContractTxType        = 102
+	ArbitrumRetryTxType           = 104
+	ArbitrumSubmitRetryableTxType = 105
+	ArbitrumInternalTxType        = 106
+	ArbitrumLegacyTxType          = 120
 )
 
 // Transaction is an Ethereum transaction.
 type Transaction struct {
 	inner TxData    // Consensus contents of a transaction
 	time  time.Time // Time first seen locally (spam avoidance)
+
+	// // Arbitrum cache: must be atomically accessed
+	// CalldataUnits uint64
 
 	// caches
 	hash atomic.Value
@@ -148,7 +158,7 @@ func (tx *Transaction) DecodeRLP(s *rlp.Stream) error {
 		if b, err = s.Bytes(); err != nil {
 			return err
 		}
-		inner, err := tx.decodeTyped(b)
+		inner, err := tx.decodeTyped(b, true)
 		if err == nil {
 			tx.setDecoded(inner, uint64(len(b)))
 		}
@@ -170,7 +180,7 @@ func (tx *Transaction) UnmarshalBinary(b []byte) error {
 		return nil
 	}
 	// It's an EIP2718 typed transaction envelope.
-	inner, err := tx.decodeTyped(b)
+	inner, err := tx.decodeTyped(b, false)
 	if err != nil {
 		return err
 	}
@@ -179,9 +189,42 @@ func (tx *Transaction) UnmarshalBinary(b []byte) error {
 }
 
 // decodeTyped decodes a typed transaction from the canonical format.
-func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
+func (tx *Transaction) decodeTyped(b []byte, arbParsing bool) (TxData, error) {
 	if len(b) <= 1 {
 		return nil, errShortTypedTx
+	}
+	// Arbitrum Parsing
+	if arbParsing {
+		switch b[0] {
+		case ArbitrumDepositTxType:
+			var inner ArbitrumDepositTx
+			err := rlp.DecodeBytes(b[1:], &inner)
+			return &inner, err
+		case ArbitrumInternalTxType:
+			var inner ArbitrumInternalTx
+			err := rlp.DecodeBytes(b[1:], &inner)
+			return &inner, err
+		case ArbitrumUnsignedTxType:
+			var inner ArbitrumUnsignedTx
+			err := rlp.DecodeBytes(b[1:], &inner)
+			return &inner, err
+		case ArbitrumContractTxType:
+			var inner ArbitrumContractTx
+			err := rlp.DecodeBytes(b[1:], &inner)
+			return &inner, err
+		case ArbitrumRetryTxType:
+			var inner ArbitrumRetryTx
+			err := rlp.DecodeBytes(b[1:], &inner)
+			return &inner, err
+		case ArbitrumSubmitRetryableTxType:
+			var inner ArbitrumSubmitRetryableTx
+			err := rlp.DecodeBytes(b[1:], &inner)
+			return &inner, err
+		case ArbitrumLegacyTxType:
+			var inner ArbitrumLegacyTxData
+			err := rlp.DecodeBytes(b[1:], &inner)
+			return &inner, err
+		}
 	}
 	switch b[0] {
 	case AccessListTxType:
@@ -254,6 +297,10 @@ func (tx *Transaction) Protected() bool {
 // Type returns the transaction type.
 func (tx *Transaction) Type() uint8 {
 	return tx.inner.txType()
+}
+
+func (tx *Transaction) GetInner() TxData {
+	return tx.inner.copy()
 }
 
 // ChainId returns the EIP155 chain ID of the transaction. The return value will always be
